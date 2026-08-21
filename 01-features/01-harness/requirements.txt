@@ -6,4 +6,6 @@
 # (`git`/`s3` skill sources landed in 1.43.17 — 04-weather-agent needs those —
 # and `awsSkills` in 1.43.32, so 1.43.32 is the floor that covers every sample.)
 boto3>=1.43.32
+# Required when credentials come from `aws login` (login credential provider).
+botocore[crt]>=1.43.32
 requests
