@@ -1,4 +1,5 @@
 # Secrets (local environment files are never committed)
+.env
 .env.local
 
 # CDK Build Artifacts
