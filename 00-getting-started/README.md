@@ -3,7 +3,7 @@
 Build, test, and deploy an AI agent to AgentCore in under 10 minutes.
 
 
-Amazon Bedrock AgentCore supports various interfaces for developing and deploying your agent code. At the lowest level, you can interact with the AgentCore APIs directly or through the [AWS SDKs](https://docs.aws.amazon.com/sdkref/latest/guide/overview.html) (such as [boto3](https://docs.aws.amazon.com/boto3/latest/reference/services/bedrock-agentcore.html)). For a simpler development experience, the [AgentCore Python SDK](https://github.com/aws/bedrock-agentcore-sdk-python) and [AgentCore Typescript SDK](https://github.com/aws/bedrock-agentcore-sdk-typescript) provide higher-level abstractions for integrating with AgentCore services like runtime, memory, and tools. The [AgentCore CLI](https://github.com/aws/agentcore-cli) builds on top of these, offering the best developer experience that lets you quickly scaffold, configure, and deploy agents. The AgentCore CLI is the easiest way to get started, and continues to be the best developer experience as you iterate on your agents. 
+Amazon Bedrock AgentCore supports various interfaces for developing and deploying your agent code. At the lowest level, you can interact with the AgentCore APIs directly or through the [AWS SDKs](https://docs.aws.amazon.com/sdkref/latest/guide/overview.html) (such as [boto3](https://docs.aws.amazon.com/boto3/latest/reference/services/bedrock-agentcore.html)). For a simpler development experience, the [AgentCore Python SDK](https://github.com/aws/bedrock-agentcore-sdk-python) and [AgentCore Typescript SDK](https://github.com/aws/bedrock-agentcore-sdk-typescript) provide higher-level abstractions for integrating with AgentCore services like runtime, memory, and tools. The [AgentCore CLI](https://github.com/aws/agentcore-cli) builds on top of these, offering the best developer experience that lets you quickly scaffold, configure, and deploy agents. The AgentCore CLI is the easiest way to get started, and continues to be the best developer experience as you iterate on your agents.
 
 In this sample, we use the AgentCore CLI to walk through one simple example — a customer support agent with custom tools — but AgentCore supports much more: persistent memory, centralized tool management via MCP Gateway, identity and auth, observability, evaluations, and multi-framework support (Strands, LangGraph, CrewAI, OpenAI Agents SDK, Google ADK, and others).
 
@@ -37,17 +37,17 @@ npm install -g @aws/agentcore
 agentcore --version
 ```
 
-### Configure AWS credentials
+### Sign in to AWS
 
 You need an AWS account with Amazon Bedrock model access enabled (this sample uses Claude Sonnet via Bedrock).
 
+Prefer browser-based sign-in with the AWS CLI:
+
 ```bash
-aws configure
-# Or set environment variables:
-# export AWS_ACCESS_KEY_ID=<your-key>
-# export AWS_SECRET_ACCESS_KEY=<your-secret>
-# export AWS_DEFAULT_REGION=us-east-1
+aws login
 ```
+
+This opens a browser, authenticates your identity, and writes temporary credentials to your local AWS profile. Re-run `aws login` whenever credentials expire.
 
 Verify your credentials:
 
@@ -55,9 +55,11 @@ Verify your credentials:
 aws sts get-caller-identity
 ```
 
+> Prefer `aws login` over long-lived access keys from `aws configure`. Use `aws configure` or environment variables only when browser login is unavailable (for example, CI or headless environments).
+
 ### Required IAM permissions
 
-Your IAM user/role needs permissions for CloudFormation, S3, IAM role management, Lambda, CloudWatch Logs, and Bedrock AgentCore. 
+Your IAM user/role needs permissions for CloudFormation, S3, IAM role management, Lambda, CloudWatch Logs, and Bedrock AgentCore.
 
 ---
 
@@ -266,16 +268,35 @@ This code creates a customer support agent with two local tools (`get_return_pol
 
 ## Step 3: Test Locally (~2 min)
 
-Start the local development server:
+### Option A: Web Chat UI (default)
 
 ```bash
 agentcore dev
 ```
 
-This starts an interactive chat interface in your terminal. The CLI automatically:
+The CLI automatically:
 1. Creates a Python virtual environment (`.venv`) if needed
 2. Installs dependencies via `uv sync`
-3. Starts a local server on port 8080 with hot reload
+3. Starts the Chat UI (default port **8081**) and the agent behind it
+4. Opens the Chat UI in your browser
+
+Chat in the browser, then press `Ctrl+C` in the terminal to stop.
+
+### Option B: Terminal / CLI invoke (`--no-browser`)
+
+For a terminal TUI, or so you can send prompts from another shell, start the agent on port **8080** without the web UI:
+
+```bash
+agentcore dev --logs --no-browser
+```
+
+In another terminal (from the same project directory):
+
+```bash
+agentcore dev "What products do you have?" --stream
+```
+
+`agentcore dev "<prompt>"` talks to the local server on port **8080**. Use `--logs --no-browser` for that workflow. Plain `agentcore dev` (Chat UI) does not listen on 8080 for CLI prompts.
 
 ### Try these queries
 
@@ -296,22 +317,6 @@ What's the return policy for electronics?
 I bought a Smart Watch (PROD-002) and want to return it. What's the policy?
 ```
 → The agent calls both `get_product_info("PROD-002")` to identify the category, then `get_return_policy("electronics")` for the policy.
-
-Press `Esc` to exit the dev server.
-
-### CLI invocation (non-interactive)
-
-You can also invoke the agent from the command line. In one terminal:
-
-```bash
-agentcore dev --logs
-```
-
-In another terminal:
-
-```bash
-agentcore dev "What products do you have?" --stream
-```
 
 ---
 
@@ -391,4 +396,25 @@ agentcore remove all
 agentcore deploy
 ```
 
-This deletes the AgentCore Runtime and all associated AWS resources (IAM roles, S3 artifacts, CloudFormation stack).
+`remove all` clears resources from `agentcore/agentcore.json`. The follow-up `deploy` tears down the corresponding AWS resources (AgentCore Runtime, IAM roles, S3 artifacts, CloudFormation stack). Agent source under `app/` is kept.
+
+To deploy again afterward, put the agent back into `agentcore.json`, then run `agentcore deploy`.
+
+Restore the config from git (simplest for this sample):
+
+```bash
+git checkout HEAD -- agentcore/agentcore.json
+agentcore deploy
+```
+
+Or re-register the existing app code with the CLI:
+
+```bash
+agentcore add agent \
+  --name CustomerSupport \
+  --type byo \
+  --code-location app/CustomerSupport/ \
+  --entrypoint main.py \
+  -y
+agentcore deploy
+```
