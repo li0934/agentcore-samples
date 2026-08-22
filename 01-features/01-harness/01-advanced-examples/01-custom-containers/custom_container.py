@@ -44,7 +44,11 @@ from utils.iam import create_harness_role, delete_harness_role
 LANGUAGE_PRESETS = {
     "node": {
         "container": "public.ecr.aws/docker/library/node:slim",
-        "system_prompt": "You are a helpful coding assistant with access to a Node.js runtime. When asked to write and run code, save it to a file and execute it using the shell.",
+        "system_prompt": (
+            "You are a helpful coding assistant. Run all code and shell commands "
+            "only inside this session's custom container (Node.js). "
+            "When asked to write and run code, save it to a file and execute it using the shell."
+        ),
         "message": (
             "Write a Node.js script that creates a simple HTTP server on port 3000 "
             "that returns JSON with the current time, Node.js version, and platform info. "
@@ -54,7 +58,11 @@ LANGUAGE_PRESETS = {
     },
     "go": {
         "container": "public.ecr.aws/docker/library/golang:1.24",
-        "system_prompt": "You are a helpful coding assistant with access to a Go toolchain. When asked to write and run code, save it to a file, build it, and execute it using the shell.",
+        "system_prompt": (
+            "You are a helpful coding assistant. Run all code and shell commands "
+            "only inside this session's custom container (Go toolchain). "
+            "When asked to write and run code, save it to a file, build it, and execute it using the shell."
+        ),
         "message": (
             "Write a Go HTTP server that listens on port 3000 and returns a JSON response "
             "with the current time, Go version, OS, architecture, and number of CPUs. "
@@ -65,7 +73,11 @@ LANGUAGE_PRESETS = {
     },
     "python": {
         "container": "public.ecr.aws/docker/library/python:3.12-slim",
-        "system_prompt": "You are a helpful coding assistant with access to a Python 3.12 runtime. When asked to write and run code, save it to a file and execute it using the shell.",
+        "system_prompt": (
+            "You are a helpful coding assistant. Run all code and shell commands "
+            "only inside this session's custom container (Python 3.12). "
+            "When asked to write and run code, save it to a file and execute it using the shell."
+        ),
         "message": (
             "Write a Python HTTP server using http.server that listens on port 3000 "
             "and returns JSON with the current time, Python version, OS, and platform info. "
