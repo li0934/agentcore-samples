@@ -67,7 +67,7 @@ DEFAULT_MCP_ENDPOINT = "https://mcp.exa.ai/mcp"
 DEFAULT_TARGET_NAME = "exa-search"
 DEFAULT_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 DEFAULT_PROMPT = (
-    "Search the web for the top 5 things to do in Tokyo in spring 2025. "
+    "Search the web for the top 5 things to do in Tokyo in summer 2026. "
     "For each activity, include a one-sentence description and the best month to visit. "
     "Format the results as a numbered list."
 )
