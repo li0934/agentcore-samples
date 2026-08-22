@@ -28,6 +28,7 @@ import uuid
 from pathlib import Path
 
 import boto3
+import botocore.exceptions
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -91,26 +92,33 @@ try:
             **limits,
         )
 
-        for event in response["stream"]:
-            if "contentBlockStart" in event:
-                start = event["contentBlockStart"].get("start", {})
-                if "toolUse" in start:
-                    print(f"\n[Tool: {start['toolUse'].get('name', '?')}]", flush=True)
-            elif "contentBlockDelta" in event:
-                delta = event["contentBlockDelta"].get("delta", {})
-                if "text" in delta:
-                    print(delta["text"], end="", flush=True)
-            elif "messageStop" in event:
-                stop = event["messageStop"]
-                reason = stop.get("stopReason", "")
-                print(f"\n\n→ stopReason: {reason}")
-            elif "metadata" in event:
-                meta = event["metadata"]
-                usage = meta.get("usage", {})
-                if usage:
-                    print(f"→ usage: input={usage.get('inputTokens', 0)}, output={usage.get('outputTokens', 0)}")
-            elif "internalServerException" in event:
-                print(f"\nError: {event['internalServerException']}")
+        # Mid-stream failures (internalServerException, validationException,
+        # runtimeClientError) are modelled with exception: true, so botocore raises
+        # EventStreamError from the iterator instead of yielding a dict. Catch and
+        # surface them here — checking "internalServerException" in event never runs.
+        try:
+            for event in response["stream"]:
+                if "contentBlockStart" in event:
+                    start = event["contentBlockStart"].get("start", {})
+                    if "toolUse" in start:
+                        print(f"\n[Tool: {start['toolUse'].get('name', '?')}]", flush=True)
+                elif "contentBlockDelta" in event:
+                    delta = event["contentBlockDelta"].get("delta", {})
+                    if "text" in delta:
+                        print(delta["text"], end="", flush=True)
+                elif "messageStop" in event:
+                    stop = event["messageStop"]
+                    reason = stop.get("stopReason", "")
+                    print(f"\n\n→ stopReason: {reason}")
+                elif "metadata" in event:
+                    meta = event["metadata"]
+                    usage = meta.get("usage", {})
+                    if usage:
+                        print(f"→ usage: input={usage.get('inputTokens', 0)}, output={usage.get('outputTokens', 0)}")
+        except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+            # EventStreamError ⊂ ClientError; transport failures ⊂ BotoCoreError.
+            print(f"\nStream error: {type(e).__name__}: {e}")
+            raise
         print()
         return sid
 

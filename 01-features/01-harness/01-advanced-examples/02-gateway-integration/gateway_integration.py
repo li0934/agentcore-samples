@@ -162,6 +162,10 @@ def stream_response(client, harness_arn, session_id, message, model_id, gateway_
         ],
     )
     full_text = ""
+    # Mid-stream failures (internalServerException, validationException,
+    # runtimeClientError) are modelled with exception: true, so botocore raises
+    # EventStreamError from the iterator instead of yielding a dict. Checking
+    # those keys on event never runs — catch the exception here instead.
     try:
         for event in response["stream"]:
             if raw:
@@ -178,17 +182,11 @@ def stream_response(client, harness_arn, session_id, message, model_id, gateway_
                     full_text += delta["text"]
             elif "messageStop" in event:
                 print()
-            # internalServerException is not the only error the stream can carry:
-            # validationException and runtimeClientError are modelled events too, and
-            # falling through them printed nothing at all, so a rejected invoke looked
-            # like an agent that simply had no answer.
-            elif "internalServerException" in event:
-                print(f"\n  Error: {event['internalServerException']}")
-            elif "validationException" in event:
-                print(f"\n  Validation error: {event['validationException']}")
-            elif "runtimeClientError" in event:
-                print(f"\n  Runtime error: {event['runtimeClientError']}")
-    except botocore.exceptions.EventStreamError:
+    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+        # EventStreamError ⊂ ClientError; transport failures ⊂ BotoCoreError.
+        # If some answer text already arrived, keep it and surface the error
+        # without aborting — otherwise re-raise so the invoke is not a silent no-op.
+        print(f"\n  Stream error: {type(e).__name__}: {e}")
         if not full_text:
             raise
     return full_text

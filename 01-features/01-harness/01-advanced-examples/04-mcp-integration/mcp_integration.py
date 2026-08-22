@@ -125,7 +125,7 @@ try:
     result = stream_invoke(
         session_id=session1,
         prompt=(
-            "Search for the latest developments in quantum computing in 2024. "
+            "Search for the latest developments in quantum computing in 2026. "
             "Find 3-5 recent articles and summarize the key breakthroughs."
         ),
         tools=[
@@ -146,7 +146,7 @@ try:
     result = stream_invoke(
         session_id=session2,
         prompt=(
-            "Compare search results from different sources about 'AWS re:Invent 2024 announcements'. "
+            "Compare search results from different sources about 'AWS re:Invent 2026 announcements'. "
             "What were the major announcements?"
         ),
         tools=[
@@ -253,7 +253,7 @@ try:
     print(f"Research session: {research_session}\n")
 
     research_prompt = """
-    Research topic: "Generative AI trends in enterprise adoption for 2024"
+    Research topic: "Generative AI trends in enterprise adoption for 2026"
 
     Please:
     1. Search for recent articles and reports about enterprise AI adoption

@@ -33,6 +33,7 @@ import uuid
 from pathlib import Path
 
 import boto3
+import botocore.exceptions
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -156,19 +157,26 @@ def stream_invoke(harness_arn, session_id, message, model_id=args.model):
                 f"[attempt {attempt}/{INVOKE_MAX_ATTEMPTS}]"
             )
             time.sleep(INVOKE_RETRY_DELAY)
-    for event in response["stream"]:
-        if "contentBlockStart" in event:
-            start = event["contentBlockStart"].get("start", {})
-            if "toolUse" in start:
-                print(f"\n[Tool: {start['toolUse'].get('name', '?')}]", flush=True)
-        elif "contentBlockDelta" in event:
-            delta = event["contentBlockDelta"].get("delta", {})
-            if "text" in delta:
-                print(delta["text"], end="", flush=True)
-        elif "messageStop" in event:
-            print()
-        elif "internalServerException" in event:
-            print(f"\nError: {event['internalServerException']}")
+    # Mid-stream failures (internalServerException, validationException,
+    # runtimeClientError) are modelled with exception: true, so botocore raises
+    # EventStreamError from the iterator instead of yielding a dict. Catch and
+    # surface them here — checking "internalServerException" in event never runs.
+    try:
+        for event in response["stream"]:
+            if "contentBlockStart" in event:
+                start = event["contentBlockStart"].get("start", {})
+                if "toolUse" in start:
+                    print(f"\n[Tool: {start['toolUse'].get('name', '?')}]", flush=True)
+            elif "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if "text" in delta:
+                    print(delta["text"], end="", flush=True)
+            elif "messageStop" in event:
+                print()
+    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+        # EventStreamError ⊂ ClientError; transport failures ⊂ BotoCoreError.
+        print(f"\nStream error: {type(e).__name__}: {e}")
+        raise
 
 
 def run_command(harness_arn, session_id, command):
