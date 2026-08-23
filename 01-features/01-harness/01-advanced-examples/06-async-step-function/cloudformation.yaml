@@ -1,3 +1,7 @@
+# CloudFormation short-form tags (!Ref, !Sub, …) are current CFN YAML, not legacy.
+# Editor SchemaStore CloudFormation schemas lag behind AWS::BedrockAgentCore::*
+# resource types, so the workspace maps this path to a permissive local schema.
+# yaml-language-server: $schema=../../../../.vscode/cloudformation-permissive.schema.json
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Complete weather workflow: Harness + Step Functions + DynamoDB'
 
@@ -222,7 +226,6 @@ Resources:
   # AgentCore Harness
   WeatherHarness:
     Type: AWS::BedrockAgentCore::Harness
-    DependsOn: HarnessExecutionRole
     Properties:
       HarnessName: !Ref HarnessName
       ExecutionRoleArn: !GetAtt HarnessExecutionRole.Arn
@@ -290,7 +293,6 @@ Resources:
   # Step Functions State Machine
   WeatherStateMachine:
     Type: AWS::StepFunctions::StateMachine
-    DependsOn: WeatherHarness
     Properties:
       StateMachineName: !Ref StateMachineName
       RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
@@ -465,9 +467,6 @@ Outputs:
 
   HarnessId:
     Description: AgentCore harness ID
-    # !Ref on AWS::BedrockAgentCore::Harness returns the ARN, not the ID, so this
-    # output used to duplicate HarnessArn. Take the last path segment of the ARN
-    # to get the real harness ID that GetHarness/DeleteHarness expect.
-    Value: !Select [1, !Split ['harness/', !GetAtt WeatherHarness.Arn]]
+    Value: !GetAtt WeatherHarness.HarnessId
     Export:
       Name: !Sub ${AWS::StackName}-HarnessId
