@@ -3,15 +3,6 @@
 # tutorial-style code patterns (e.g., env setup before imports).
 line-length = 120
 
-[tool.pyright]
-# Shared harness helpers live under 01-harness/utils/. Adding that directory
-# (not 01-harness itself) lets samples import `harness` without colliding with
-# a local `utils/` package (e.g. 07-oauth).
-extraPaths = ["01-features/01-harness/utils"]
-
-[tool.basedpyright]
-extraPaths = ["01-features/01-harness/utils"]
-
 [tool.ruff.lint]
 ignore = [
   # E402: Module level import not at top of file — common in tutorial scripts
