@@ -98,7 +98,10 @@ are idempotent — safe to re-run:
 
 **Credential providers**: Registered once with `create_oauth2_credential_provider`. The harness references the provider ARN — no secrets in the harness config or invoke call.
 
-**Event stream parsing**: This script calls the HTTPS endpoint directly (boto3 doesn't support bearer-token invocation for harness). The response is a binary event-stream that requires JSON extraction.
+**Event stream parsing**: Invoke still uses HTTPS with a Bearer token (boto3 cannot
+attach JWT inbound auth). The response body is decoded with botocore's `EventStream`
+and the `InvokeHarness` service model — the same path as `response["stream"]` after
+`invoke_harness`.
 
 ## Troubleshooting
 
@@ -129,10 +132,10 @@ Note that `CreateMemory` and `ListMemories` are account-scoped and must be grant
 granting them on `memory/*` evaluates to an implicit deny.
 
 ### Issue: The run prints the "What just happened?" summary but no order details
-**Solution**: You are on a version of this sample from before the stream errors were
-surfaced. `InvokeHarness` returns HTTP 200 and then reports agent-side failures as error
-frames *inside* the event stream, so a run that failed could still print the success summary.
-The script now raises on those frames instead.
+**Solution**: You are on a version of this sample from before stream errors were
+surfaced. `InvokeHarness` returns HTTP 200 and then reports agent-side failures as
+`exception: true` event-stream frames; botocore raises `EventStreamError` for those.
+The script catches that and fails the run instead of printing a false success summary.
 
 ## AgentCore CLI
 

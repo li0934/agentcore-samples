@@ -21,10 +21,11 @@ Architecture:
                                    → response flows back to user
 
 Usage:
-    # Set credentials via environment variables
+    python oauth_gateway.py
+
+    # Optional: override the Cognito test user credentials
     export HARNESS_USER_NAME="testuser"
     export HARNESS_USER_PASS="TestPassword123!"
-    python oauth_gateway.py
 
     # Skip cleanup to inspect resources
     python oauth_gateway.py --skip-cleanup
@@ -33,26 +34,27 @@ Prerequisites:
     - AWS CLI configured with credentials
     - pip install -r ../../requirements.txt
     - AWS_DEFAULT_REGION environment variable set
-    - HARNESS_USER_NAME environment variable (Cognito test user name)
-    - HARNESS_USER_PASS environment variable (Cognito test user password, min 8 chars)
+    - Optional: HARNESS_USER_NAME / HARNESS_USER_PASS (defaults: testuser / TestPassword123!)
 """
 
 import argparse
-import json
 import os
-import re
 import sys
-import time
 import urllib.parse
 import uuid
 from pathlib import Path
 
 import boto3
+import botocore.exceptions
 import requests as http_requests
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))  # root utils
-sys.path.insert(0, str(Path(__file__).parent))  # local utils/
+# Local `utils/` (setup_helpers) shadows the shared package at 01-harness/utils/.
+# Put the *shared utils directory* on path so its modules import as top-level
+# names (`harness`, not `utils.harness`) and do not collide.
+_SAMPLE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_SAMPLE_DIR.parent.parent / "utils"))
 
+from harness import poll_harness_status
 from utils.setup_helpers import (
     cleanup_all,
     create_credential_provider,
@@ -61,6 +63,7 @@ from utils.setup_helpers import (
     create_m2m_pool,
     create_user_auth_pool,
     deploy_lambda,
+    invoke_harness_event_stream,
     iter_paginated,
 )
 
@@ -70,34 +73,24 @@ parser.add_argument("--skip-cleanup", action="store_true", help="Keep all resour
 args = parser.parse_args()
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-REGION = boto3.session.Session().region_name or "us-east-1"
+REGION = boto3.Session().region_name or "us-east-1"
 ACCOUNT_ID = boto3.client("sts", region_name=REGION).get_caller_identity()["Account"]
 PREFIX = "harness-oauth-demo"
 
-# These mirror utils/harness.py, which this sample cannot import: its own
-# `utils/` package shadows the shared one on sys.path, so `utils.harness` is not
-# importable from here. CREATE_FAILED / UPDATE_FAILED / DELETE_FAILED are the
-# terminal values in the HarnessStatus enum.
-HARNESS_POLL_INTERVAL = 10
-HARNESS_POLL_TIMEOUT = 600
-HARNESS_FAILURE_STATUSES = ("CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED")
-
-# Credentials for the test Cognito user
-USER1_NAME = os.environ.get("HARNESS_USER_NAME")
-USER1_PASS = os.environ.get("HARNESS_USER_PASS")
-
-if not USER1_NAME or not USER1_PASS:
-    raise ValueError(
-        "Set HARNESS_USER_NAME and HARNESS_USER_PASS environment variables.\n"
-        "Example:\n"
-        "  export HARNESS_USER_NAME='testuser'\n"
-        "  export HARNESS_USER_PASS='TestPassword123!'"
-    )
+# Credentials for the test Cognito user (override via env if desired)
+USER1_NAME = os.environ.get("HARNESS_USER_NAME", "testuser")
+USER1_PASS = os.environ.get("HARNESS_USER_PASS", "TestPassword123!")
 
 ac_control = boto3.client("bedrock-agentcore-control", region_name=REGION)
 cognito = boto3.client("cognito-idp", region_name=REGION)
 
 print(f"Region: {REGION}  Account: {ACCOUNT_ID}")
+
+# Bound before the outer try so `finally` and the harness try/except cannot leave
+# names possibly-unbound for the type checker (or for --skip-cleanup prints).
+gw = None
+HARNESS_ID = None
+HARNESS_ARN = None
 
 # Every step below is wrapped in a single try/finally so a failure part-way
 # through still tears down what was already created. Without it, an error
@@ -191,44 +184,34 @@ try:
         HARNESS_ARN = harness_resp["harness"]["arn"]
         print(f"Harness created: {HARNESS_ID}")
     except ac_control.exceptions.ConflictException:
-        HARNESS_ID = None
         # ListHarnesses is paginated. Reading only the first page meant that once
         # the account held more harnesses than fit in one page, this recovery path
         # raised "conflict but not found" for a harness that demonstrably exists —
         # the create had just been rejected because of it.
-        for h in iter_paginated(ac_control, "list_harnesses", "harnesses"):
-            if h.get("harnessName") == HARNESS_NAME:
-                HARNESS_ID = h["harnessId"]
-                HARNESS_ARN = h["arn"]
-                break
-        if not HARNESS_ID:
+        match = next(
+            (
+                h
+                for h in iter_paginated(ac_control, "list_harnesses", "harnesses")
+                if h.get("harnessName") == HARNESS_NAME
+            ),
+            None,
+        )
+        if not match:
             raise RuntimeError(f"Harness {HARNESS_NAME} conflict but not found")
+        HARNESS_ID = match["harnessId"]
+        HARNESS_ARN = match["arn"]
         print(f"Harness already exists: {HARNESS_ID}")
+
+    if HARNESS_ID is None or HARNESS_ARN is None:
+        raise RuntimeError(f"Harness {HARNESS_NAME} was not resolved")
 
     print(f"Harness ID:  {HARNESS_ID}")
     print(f"Harness ARN: {HARNESS_ARN}")
 
-    # A harness takes ~150s to reach READY, so this has to wait for the real
-    # thing. The original loop was silent about both failure and giving up:
-    # CREATE_FAILED was polled as "not ready yet" for the full five minutes, and
-    # once the loop expired the script carried straight on and invoked a harness
-    # that was still CREATING — surfacing as a confusing HTTP error rather than
-    # the real cause. 600s leaves headroom over the ~150s typical case.
+    # A harness takes ~150s to reach READY; poll_harness_status raises on
+    # CREATE_FAILED / timeout instead of continuing into a broken invoke.
     print("Waiting for harness READY...")
-    h_deadline = time.monotonic() + HARNESS_POLL_TIMEOUT
-    while True:
-        h_status = ac_control.get_harness(harnessId=HARNESS_ID)["harness"]["status"]
-        print(f"  {h_status}")
-        if h_status == "READY":
-            break
-        if h_status in HARNESS_FAILURE_STATUSES:
-            raise RuntimeError(f"Harness {HARNESS_ID} entered terminal status {h_status}")
-        if time.monotonic() > h_deadline:
-            raise TimeoutError(
-                f"Harness {HARNESS_ID} not READY after {HARNESS_POLL_TIMEOUT}s (last status: {h_status})"
-            )
-        time.sleep(HARNESS_POLL_INTERVAL)
-    print(f"Harness status: {h_status}")
+    poll_harness_status(ac_control, HARNESS_ID)
 
     # ── Step 3: Get Bearer Token from User Auth Pool ──────────────────────────
     print("\n=== Step 3: Authenticate User — Get Bearer Token ===")
@@ -273,30 +256,25 @@ try:
     full_text = []
     stream_errors = []
     raw = resp.content
-    # Extract JSON objects from the binary event-stream
-    json_objects = re.findall(rb"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw)
-    for obj_bytes in json_objects:
-        try:
-            obj = json.loads(obj_bytes.decode("utf-8", errors="ignore"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            continue
-        delta = obj.get("delta", {})
-        if "text" in delta:
-            full_text.append(delta["text"])
-            print(delta["text"], end="", flush=True)
-        # The stream carries runtimeClientError / validationException /
-        # internalServerException frames as a bare {"message": ...} object. The
-        # HTTP status is still 200 — the request was accepted, the *agent* then
-        # failed — so ignoring these frames turned a hard failure into a silent
-        # one: the response looked merely empty and the summary below still
-        # claimed all three auth hops had succeeded.
-        elif "message" in obj and "delta" not in obj:
-            stream_errors.append(obj["message"])
-    print()
+    # boto3 cannot attach the JWT Authorization header, but the body is still the
+    # InvokeHarness event stream — decode it with botocore like response["stream"].
+    # exception: true frames (runtimeClientError, …) raise EventStreamError instead
+    # of yielding a dict; HTTP status stays 200, so catching here is what keeps a
+    # mid-agent failure from looking like an empty success.
+    try:
+        for event in invoke_harness_event_stream(raw, REGION):
+            if "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if "text" in delta:
+                    full_text.append(delta["text"])
+                    print(delta["text"], end="", flush=True)
+            elif "messageStop" in event:
+                print()
+    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+        stream_errors.append(str(e))
+        print(f"\n❌ Stream error: {type(e).__name__}: {e}")
 
     if stream_errors:
-        for msg in stream_errors:
-            print(f"\n❌ Stream error: {msg}")
         raise RuntimeError(f"InvokeHarness streamed {len(stream_errors)} error frame(s); first: {stream_errors[0]}")
 
     if not full_text:
@@ -325,11 +303,8 @@ finally:
         cleanup_all(REGION, PREFIX)
     else:
         print("\n=== Skipping cleanup (--skip-cleanup) ===")
-        # Guarded with locals(): this block now runs in `finally`, so it is also
-        # reached when a step failed before these names were bound. Referencing
-        # them unguarded would raise NameError here and mask the real error.
-        if "HARNESS_ID" in locals():
+        if HARNESS_ID is not None:
             print(f"Harness ID:  {HARNESS_ID}")
-        if "gw" in locals():
+        if gw is not None:
             print(f"Gateway ARN: {gw['gateway_arn']}")
         print("Run 'python oauth_gateway.py' again to reuse existing resources.")

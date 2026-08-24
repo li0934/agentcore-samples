@@ -13,6 +13,8 @@ import uuid
 import zipfile
 
 import boto3
+from botocore.eventstream import EventStream
+from botocore.parsers import ResponseParserFactory
 
 # Gateways report UPDATE_UNSUCCESSFUL rather than FAILED when an update fails, and
 # targets add SYNCHRONIZE_UNSUCCESSFUL. These are the only terminal-failure values
@@ -33,6 +35,29 @@ TARGET_PENDING_AUTH_STATUSES = (
 
 GATEWAY_POLL_INTERVAL = 10
 GATEWAY_POLL_TIMEOUT = 300
+
+
+def invoke_harness_event_stream(raw_body: bytes, region: str) -> EventStream:
+    """Decode an InvokeHarness `application/vnd.amazon.eventstream` body via botocore.
+
+    CUSTOM_JWT requires a Bearer token on HTTPS — boto3 `invoke_harness` cannot
+    set that header — but the wire format matches the data-plane model, so we
+    reuse the service shape + EventStream parser instead of scraping JSON with a regex.
+    """
+
+    class _RawByteStream:
+        # botocore EventStream expects `.stream()` (chunk iterator), not a plain buffer.
+        def __init__(self, data: bytes):
+            self._data = data
+
+        def stream(self):
+            if self._data:
+                yield self._data
+
+    client = boto3.client("bedrock-agentcore", region_name=region)
+    stream_shape = client.meta.service_model.operation_model("InvokeHarness").output_shape.members["stream"]
+    event_parser = ResponseParserFactory().create_parser(client.meta.service_model.protocol)._event_stream_parser
+    return EventStream(_RawByteStream(raw_body), stream_shape, event_parser, "InvokeHarness")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -98,9 +123,23 @@ def _find_pool_by_name(cog, pool_name):
     return None
 
 
+def _iter_clients(cog, pool_id):
+    """Yield every app client in a Cognito user pool, following pagination.
+
+    ListUserPoolClients also caps a page at 60. Without pagination, a client on a
+    later page looked absent and create paths duplicated it (or reuse skipped the
+    real ClientSecret needed for the M2M credential provider).
+    """
+    for page in cog.get_paginator("list_user_pool_clients").paginate(
+        UserPoolId=pool_id,
+        PaginationConfig={"PageSize": 60},
+    ):
+        yield from page.get("UserPoolClients", [])
+
+
 def _find_client_by_name(cog, pool_id, client_name):
     """Return (client_id, client_secret|None) if an app client exists."""
-    for c in cog.list_user_pool_clients(UserPoolId=pool_id, MaxResults=60)["UserPoolClients"]:
+    for c in _iter_clients(cog, pool_id):
         if c["ClientName"] == client_name:
             full = cog.describe_user_pool_client(
                 UserPoolId=pool_id,
@@ -111,14 +150,23 @@ def _find_client_by_name(cog, pool_id, client_name):
 
 
 def _ensure_role(iam_c, role_name, trust_doc):
-    """Create an IAM role if it doesn't exist. Returns the role ARN."""
+    """Create an IAM role, or refresh its trust policy if it already exists. Returns the ARN.
+
+    Matching `_ensure_policy` and `utils/iam.create_harness_role`: an older run can
+    leave a role whose AssumeRolePolicyDocument is stale. Returning the ARN alone
+    would keep that trust forever, so re-runs always call update_assume_role_policy.
+    """
     try:
-        return iam_c.create_role(
+        arn = iam_c.create_role(
             RoleName=role_name,
             AssumeRolePolicyDocument=trust_doc,
         )["Role"]["Arn"]
+        return arn
     except iam_c.exceptions.EntityAlreadyExistsException:
-        return iam_c.get_role(RoleName=role_name)["Role"]["Arn"]
+        arn = iam_c.get_role(RoleName=role_name)["Role"]["Arn"]
+        iam_c.update_assume_role_policy(RoleName=role_name, PolicyDocument=trust_doc)
+        print(f"  Role {role_name} already existed — updated trust policy")
+        return arn
 
 
 def _ensure_policy(iam_c, account_id, policy_name, policy_doc):
@@ -328,8 +376,44 @@ def create_credential_provider(
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _zip_lambda_code(lambda_code_path: str) -> bytes:
+    """Package the on-disk Lambda source as ZipFile bytes for create/update."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Arcname is what the runtime imports — Handler is lambda_function.lambda_handler.
+        zf.write(lambda_code_path, "lambda_function.py")
+    return buf.getvalue()
+
+
+def _ensure_lambda_function(lam, fn_name: str, role_arn: str, zip_bytes: bytes) -> str:
+    """Create the Lambda, or refresh its code if it already exists. Returns the ARN.
+
+    Matching `_ensure_role` / `_ensure_policy`: re-runs must pick up edits to
+    lambda_function_code.py, not leave the previous ZipFile in place forever.
+    """
+    try:
+        fn_arn = lam.get_function(FunctionName=fn_name)["Configuration"]["FunctionArn"]
+        lam.update_function_code(FunctionName=fn_name, ZipFile=zip_bytes)
+        print(f"  Lambda already exists — updated code: {fn_name}")
+        return fn_arn
+    except lam.exceptions.ResourceNotFoundException:
+        print("  Waiting 10 s for IAM propagation...")
+        time.sleep(10)
+        fn_arn = lam.create_function(
+            FunctionName=fn_name,
+            Runtime="python3.12",
+            Role=role_arn,
+            Handler="lambda_function.lambda_handler",
+            Code={"ZipFile": zip_bytes},
+            Description="Order management for AgentCore Gateway",
+            Timeout=30,
+        )["FunctionArn"]
+        print(f"  Lambda created: {fn_name}")
+        return fn_arn
+
+
 def deploy_lambda(region: str, prefix: str) -> dict:
-    """Deploy (or reuse) the order-management Lambda function.
+    """Deploy (or update) the order-management Lambda function.
 
     Returns dict with keys: function_name, function_arn, role_name
     """
@@ -355,41 +439,17 @@ def deploy_lambda(region: str, prefix: str) -> dict:
         }
     )
     role_arn = _ensure_role(iam_c, role_name, trust)
-    try:
-        iam_c.attach_role_policy(
-            RoleName=role_name,
-            PolicyArn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-        )
-    except Exception as e:  # noqa: BLE001 - already attached is fine; anything else must be visible
-        # Silently passing here hid a genuine failure to grant the Lambda its
-        # logging permissions, which then showed up only as missing CloudWatch logs.
-        print(f"  Could not attach AWSLambdaBasicExecutionRole ({e})")
+    # AttachRolePolicy is idempotent when the policy is already attached; any
+    # other failure (AccessDenied, missing role) must stop the deploy so the
+    # Lambda is not left without CloudWatch logging permissions.
+    iam_c.attach_role_policy(
+        RoleName=role_name,
+        PolicyArn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+    )
     print(f"  Role: {role_name}")
 
     fn_name = f"{prefix}-order-mgmt"
-
-    try:
-        fn_arn = lam.get_function(FunctionName=fn_name)["Configuration"]["FunctionArn"]
-        print(f"  Lambda already exists: {fn_name}")
-    except lam.exceptions.ResourceNotFoundException:
-        print("  Waiting 10 s for IAM propagation...")
-        time.sleep(10)
-
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(lambda_code_path, "lambda_function.py")
-        buf.seek(0)
-
-        fn_arn = lam.create_function(
-            FunctionName=fn_name,
-            Runtime="python3.12",
-            Role=role_arn,
-            Handler="lambda_function.lambda_handler",
-            Code={"ZipFile": buf.read()},
-            Description="Order management for AgentCore Gateway",
-            Timeout=30,
-        )["FunctionArn"]
-        print(f"  Lambda created: {fn_name}")
+    fn_arn = _ensure_lambda_function(lam, fn_name, role_arn, _zip_lambda_code(lambda_code_path))
 
     lam.get_waiter("function_active_v2").wait(FunctionName=fn_name)
     print("  Lambda is Active")
