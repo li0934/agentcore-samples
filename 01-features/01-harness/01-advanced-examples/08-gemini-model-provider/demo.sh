@@ -124,3 +124,5 @@ printf '   cd %s/%s\n' "$WORKDIR" "$PROJECT"
 printf '   agentcore remove harness --name %s --yes\n' "$HARNESS"
 printf '   agentcore remove credential --name %s --yes\n' "$CRED"
 printf '   agentcore deploy --yes\n'
+printf '   # Identity API-key providers can remain after stack tear-down:\n'
+printf '   aws bedrock-agentcore-control delete-api-key-credential-provider --name %s --region %s\n' "$CRED" "$REGION"

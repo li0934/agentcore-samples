@@ -30,10 +30,8 @@ it by ARN — the key never sits in the harness config.
   ```bash
   export AWS_DEFAULT_REGION=us-west-2
   ```
-- A **Google Gemini API key** (Google AI Studio):
-  ```bash
-  export GEMINI_API_KEY="<your-key>"
-  ```
+- A **Google Gemini API key** (Google AI Studio). Have it ready to paste when
+  the CLI prompts; you do not need to put it on the command line.
 
 ## Steps
 
@@ -50,11 +48,15 @@ or `deploy` fails its TypeScript build.)
 
 ### 2. Store the Gemini key
 
+Prefer interactive mode so the key is not exposed in shell history or the process
+table (the CLI warns if you pass `--api-key` as a flag):
+
 ```bash
-agentcore add credential --type api-key --name my-gemini-key --api-key "$GEMINI_API_KEY"
+agentcore add credential --type api-key --name my-gemini-key
 ```
 
-This registers the key in the token vault. Its ARN is:
+Enter the Gemini API key when prompted (input is masked). This registers the key
+in the token vault. Its ARN is:
 
 ```
 arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default/apikeycredentialprovider/my-gemini-key
@@ -110,6 +112,22 @@ agentcore status
 agentcore remove harness --name gemini_harness --yes
 agentcore remove credential --name my-gemini-key --yes
 agentcore deploy --yes
+```
+
+`deploy` tears down the CloudFormation stack and harness. The API-key credential
+provider in AgentCore Identity can still remain after that — delete it explicitly:
+
+```bash
+aws bedrock-agentcore-control delete-api-key-credential-provider \
+  --name my-gemini-key \
+  --region "${AWS_DEFAULT_REGION:-us-east-1}"
+```
+
+Confirm it is gone:
+
+```bash
+aws bedrock-agentcore-control get-api-key-credential-provider --name my-gemini-key
+# expect ResourceNotFoundException
 ```
 
 > Deleting a harness reserves its name for a while (minutes–hours). To redeploy
