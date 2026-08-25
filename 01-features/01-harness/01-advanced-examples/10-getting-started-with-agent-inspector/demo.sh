@@ -102,10 +102,10 @@ preflight() {
 
   say "AgentCore CLI version:"; run agentcore --version
 
-  # Resolve account (for deploy + masking). Masked on screen.
+  # Resolve account (for deploy + masking later output). Do not print the id.
   ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-  echo "${GREEN}\$ aws sts get-caller-identity --query Account --output text${RESET}"
-  echo "ACCOUNT"   # we deliberately print the masked form
+  [[ -n "$ACCOUNT_ID" ]] || {
+    echo "${YELLOW}Could not resolve AWS account. Check your credentials.${RESET}"; exit 1; }
   say "Region: ${REGION}"
 
   # Transaction Search is the one account-level prerequisite for trace visibility.

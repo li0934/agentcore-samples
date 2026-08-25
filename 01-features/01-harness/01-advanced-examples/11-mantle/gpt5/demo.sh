@@ -79,8 +79,8 @@ preflight() {
   say "AgentCore CLI version:"; run agentcore --version
 
   ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-  echo "${GREEN}\$ aws sts get-caller-identity --query Account --output text${RESET}"
-  echo "<ACCOUNT>"
+  [[ -n "$ACCOUNT_ID" ]] || {
+    echo "${YELLOW}Could not resolve AWS account. Check your credentials.${RESET}"; exit 1; }
   say "Region: ${REGION}  |  Model: ${MODEL_ID}  |  API format: ${API_FORMAT} (Mantle)"
 
   # Transaction Search — the one account-level prerequisite for trace visibility.
@@ -138,10 +138,22 @@ EOF
   mask < "app/${HARNESS_NAME}/harness.json"
 }
 
+# GPT Marketplace models auto-Subscribe on first invoke.
+# agentcore-cdk grants bedrock-mantle inference IAM, but not aws-marketplace:*.
+grant_marketplace_access() {
+  local role_name="${PROJECT_NAME}_${HARNESS_NAME}"
+  step "Step 2b: Grant AWS Marketplace model access on execution role ${role_name}"
+  run aws iam put-role-policy \
+    --role-name "$role_name" \
+    --policy-name BedrockMarketplaceModelAccess \
+    --policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"MarketplaceModelSubscription","Effect":"Allow","Action":["aws-marketplace:ViewSubscriptions","aws-marketplace:Subscribe","aws-marketplace:Unsubscribe"],"Resource":"*"}]}'
+}
+
 deploy() {
   step "Step 2: Deploy (CDK creates the IAM execution role + the harness)"
   cd "$WORKDIR/$PROJECT_NAME"
   AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION" run agentcore deploy --target default
+  grant_marketplace_access
   say "Harness status:"
   AWS_REGION="$REGION" run agentcore status --target default
 }

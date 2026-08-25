@@ -7,7 +7,7 @@ the harness with `--api-format responses` (or `chat_completions`) instead of the
 
 Two walkthroughs, smallest first:
 
-- **[endpoint](endpoint)** — the open-weight **`gpt-oss-120b`** model with `--api-format responses`.
+- **[endpoint](endpoint)** — **`openai.gpt-5.6-luna`** with `--api-format responses`.
   The minimal "harness on Mantle" example: deploy, invoke, confirm spans in CloudWatch.
 - **[gpt5](gpt5)** — the hosted **GPT-5.4** model on the same path. GPT-5.4 supports the Responses API
   only, so it must use `--api-format responses`. Builds on the endpoint example.

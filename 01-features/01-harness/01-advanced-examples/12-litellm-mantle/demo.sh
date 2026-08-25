@@ -115,8 +115,8 @@ preflight() {
   say "AgentCore CLI version:"; run agentcore --version
 
   ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-  echo "${GREEN}\$ aws sts get-caller-identity --query Account --output text${RESET}"
-  echo "<ACCOUNT>"
+  [[ -n "$ACCOUNT_ID" ]] || {
+    echo "${YELLOW}Could not resolve AWS account. Check your credentials.${RESET}"; exit 1; }
   say "Region: ${REGION}  |  Model: ${MODEL_ID}  |  Provider: lite_llm -> Mantle (${API_BASE})"
 
   # Transaction Search — the one account-level prerequisite for trace visibility.

@@ -11,8 +11,8 @@
 # `apiFormat: responses` instead of the default `converse_stream`. With a Bedrock
 # provider, that routes inference through the `bedrock-mantle` endpoint instead
 # of `bedrock-runtime` — no API key, the harness execution role's Bedrock
-# permissions are used. Here we run OpenAI's open-weight `gpt-oss-120b` model,
-# served through Bedrock via the OpenAI-compatible API.
+# permissions are used. Here we run OpenAI's `gpt-5.6-luna` model,
+# served through Bedrock via the OpenAI-compatible Responses API.
 #
 # This echoes every command, masks your account id as <ACCOUNT> and
 # your username/home path as <USER>, and auto-generates a unique name per run.
@@ -31,11 +31,10 @@ RUN_ID="${RUN_ID:-$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-6
 PROJECT_NAME="${PROJECT_NAME:-mantle${RUN_ID}}"      # <=23 chars, alphanumeric, starts with a letter
 HARNESS_NAME="${HARNESS_NAME:-mantle_${RUN_ID}}"     # <=48 chars, starts with a letter
 # Mantle: a Bedrock model + the OpenAI-compatible Responses API.
-# NOTE: the bedrock-mantle endpoint uses the model id WITHOUT the "-1:0" version
-# suffix that list-foundation-models / bedrock-runtime use. So it is
-# "openai.gpt-oss-120b" here, not "openai.gpt-oss-120b-1:0" — the suffixed form
-# returns 404 "model does not exist" on the Mantle endpoint.
-MODEL_ID="${MODEL_ID:-openai.gpt-oss-120b}"
+# NOTE: bedrock-mantle uses the foundation model id (e.g. openai.gpt-5.6-luna).
+# bedrock-runtime OpenAI paths typically need a cross-Region inference profile
+# instead (e.g. us.openai.gpt-5.6-luna).
+MODEL_ID="${MODEL_ID:-openai.gpt-5.6-luna}"
 API_FORMAT="${API_FORMAT:-responses}"                # converse_stream | responses | chat_completions
 WORKDIR="${WORKDIR:-$(pwd)/.demo-workspace-${PROJECT_NAME}}"
 SESSION_ID="mantle-demo-$(uuidgen | tr '[:upper:]' '[:lower:]')"   # >= 33 chars
@@ -82,8 +81,8 @@ preflight() {
   say "AgentCore CLI version:"; run agentcore --version
 
   ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-  echo "${GREEN}\$ aws sts get-caller-identity --query Account --output text${RESET}"
-  echo "<ACCOUNT>"
+  [[ -n "$ACCOUNT_ID" ]] || {
+    echo "${YELLOW}Could not resolve AWS account. Check your credentials.${RESET}"; exit 1; }
   say "Region: ${REGION}  |  Model: ${MODEL_ID}  |  API format: ${API_FORMAT} (Mantle)"
 
   # Transaction Search — the one account-level prerequisite for trace visibility.
@@ -141,10 +140,23 @@ EOF
   mask < "app/${HARNESS_NAME}/harness.json"
 }
 
+# GPT Marketplace models (e.g. gpt-5.6-luna) auto-Subscribe on first invoke.
+# agentcore-cdk grants bedrock-mantle inference IAM, but not aws-marketplace:*.
+grant_marketplace_access() {
+  # Physical role name is always "${projectName}_${harnessName}" (AgentCoreHarnessRole).
+  local role_name="${PROJECT_NAME}_${HARNESS_NAME}"
+  step "Step 2b: Grant AWS Marketplace model access on execution role ${role_name}"
+  run aws iam put-role-policy \
+    --role-name "$role_name" \
+    --policy-name BedrockMarketplaceModelAccess \
+    --policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"MarketplaceModelSubscription","Effect":"Allow","Action":["aws-marketplace:ViewSubscriptions","aws-marketplace:Subscribe","aws-marketplace:Unsubscribe"],"Resource":"*"}]}'
+}
+
 deploy() {
   step "Step 2: Deploy (CDK creates the IAM execution role + the harness)"
   cd "$WORKDIR/$PROJECT_NAME"
   AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION" run agentcore deploy --target default
+  grant_marketplace_access
   say "Harness status:"
   AWS_REGION="$REGION" run agentcore status --target default
 }

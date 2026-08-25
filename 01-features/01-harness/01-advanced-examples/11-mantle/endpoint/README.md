@@ -7,22 +7,22 @@
 | Tutorial type       | Advanced example                                                 |
 | Agent type          | General-purpose assistant                                        |
 | Agentic framework   | None (AgentCore CLI)                                             |
-| LLM model           | OpenAI `gpt-oss-120b` (open-weight), served through Amazon Bedrock |
+| LLM model           | OpenAI `gpt-5.6-luna`, served through Amazon Bedrock Mantle |
 | Tutorial components | AgentCore harness, Bedrock Mantle endpoint, Observability, CloudWatch |
 | Example complexity  | Beginner                                                         |
 | Tooling             | `agentcore` CLI (no application code)                            |
 
 A Bedrock harness can call its model two ways, chosen by one config field, `apiFormat`. This
-example uses the OpenAI-compatible **Mantle** path to run OpenAI's open-weight `gpt-oss-120b`
+example uses the OpenAI-compatible **Mantle** path to run OpenAI's `gpt-5.6-luna`
 through Amazon Bedrock — no API key, the harness execution role's Bedrock permissions are used.
 
 ## What you learn
 
 - The difference between the `bedrock-runtime` (Converse) and `bedrock-mantle` (OpenAI-compatible) endpoints
 - How to select the endpoint with `agentcore add harness --api-format`
-- Run an OpenAI open-weight model (`gpt-oss-120b`) on a harness with no API key
+- Run OpenAI GPT-5.6 Luna on a harness with no API key
 - Confirm the Mantle harness is observable — the GenAI span tree lands in `aws/spans`
-- The model-id gotcha that trips up the Mantle endpoint
+- The model-id difference between Mantle and `bedrock-runtime` OpenAI paths
 
 ## Two endpoints, one flag
 
@@ -39,17 +39,16 @@ provider harness sends inference to the `bedrock-mantle.{region}.api.aws` endpoi
 saved to `harness.json` as `model.apiFormat`; it is not a different provider (the provider stays
 `bedrock`).
 
-## ⚠️ The Mantle model id drops the version suffix
+## ⚠️ Mantle vs runtime model ids
 
-This is the one thing that will trip you up. The same model has **two ids**:
+GPT-5.6 models are invoked with different ids depending on the endpoint:
 
 | Endpoint | Model id |
 |---|---|
-| `bedrock-runtime` / `list-foundation-models` | `openai.gpt-oss-120b-1:0` |
-| **`bedrock-mantle`** | **`openai.gpt-oss-120b`** (no `-1:0`) |
+| **`bedrock-mantle`** (this example) | **`openai.gpt-5.6-luna`** (foundation model id) |
+| `bedrock-runtime` OpenAI Responses path | `us.openai.gpt-5.6-luna` (cross-Region inference profile) |
 
-Passing the `-1:0` form to a Mantle harness returns `404 "The model '...' does not exist"`. Use the
-suffix-less id for `--api-format responses`/`chat_completions`.
+Use the foundation model id with `--api-format responses` / `chat_completions` on Mantle.
 
 ## Architecture
 
@@ -73,7 +72,7 @@ The harness is auto-instrumented exactly like a Converse harness — no ADOT, no
   `--api-format` shipped in the CLI).
 - **AWS CLI v2** with credentials for a harness preview region
   (`us-east-1`, `us-west-2`, `ap-southeast-2`, `eu-central-1`).
-- Amazon Bedrock access to `openai.gpt-oss-120b` in that region.
+- Amazon Bedrock access to `openai.gpt-5.6-luna` in that region (e.g. `us-east-1`, `us-east-2`, `us-west-2`).
 - **CloudWatch Transaction Search enabled once per account** (the script checks and prints the
   enable commands if missing). See
   [AgentCore Observability — getting started](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-get-started.html).
@@ -91,7 +90,7 @@ The harness is auto-instrumented exactly like a Converse harness — no ADOT, no
 `demo.sh` runs these steps, printing each command:
 
 1. Pre-flight checks (CLI, credentials, Transaction Search).
-2. Scaffold an empty project and add a harness with `--api-format responses` (gpt-oss-120b, memory on).
+2. Scaffold an empty project and add a harness with `--api-format responses` (gpt-5.6-luna, memory on).
 3. Deploy — CDK creates the IAM execution role and the harness is created.
 4. Invoke the harness through Mantle across one session.
 5. Query `aws/spans` to confirm OpenTelemetry spans were emitted.
@@ -113,7 +112,7 @@ Everything is the same as a default harness except the model block. After `add h
 ```json
 "model": {
   "provider": "bedrock",
-  "modelId": "openai.gpt-oss-120b",
+  "modelId": "openai.gpt-5.6-luna",
   "apiFormat": "responses"
 }
 ```
@@ -123,7 +122,7 @@ The equivalent CLI call:
 ```bash
 agentcore add harness --name my-mantle-agent \
   --model-provider bedrock \
-  --model-id openai.gpt-oss-120b \
+  --model-id openai.gpt-5.6-luna \
   --api-format responses \
   --system-prompt "You are a helpful assistant."
 ```
@@ -137,7 +136,7 @@ span tree — same shape as any harness, and the span carries the Mantle model i
 POST /invocations
   └─ invoke_agent Strands Agents          ... in / ... out
        └─ execute_event_loop_cycle
-            └─ chat                         gen_ai.request.model = openai.gpt-oss-120b
+            └─ chat                         gen_ai.request.model = openai.gpt-5.6-luna
 ```
 
 ```
@@ -149,12 +148,14 @@ https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#gen-ai
 
 ## Best practices
 
-- **Use the suffix-less model id** for Mantle (`openai.gpt-oss-120b`). The `-1:0` form 404s.
+- **Use the Mantle foundation model id** (`openai.gpt-5.6-luna`), not the `us.` inference profile.
 - **`--api-format` is set at add-harness time.** `agentcore invoke` overrides `--model-id` and
   `--model-provider` but not the API format. To switch Converse↔Mantle per call, use the boto3
   `invoke_harness` `model` object.
 - **No API key needed** for a `bedrock` Mantle harness — it uses the execution role's Bedrock
   permissions, just like a Converse harness.
+- **Marketplace models** (GPT-5.6 etc.) need `aws-marketplace:Subscribe` on the harness
+  execution role. `demo.sh` attaches that policy after deploy (CDK does not yet).
 - **Enable Transaction Search once per account, early**, so spans are visible when you need them.
 - **Clean up.** Run `./cleanup.sh` when you are done so no billable resources are left.
 
