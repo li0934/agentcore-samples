@@ -16,7 +16,8 @@ This example runs OpenAI's **GPT-5.4** on an AgentCore harness using a **LiteLLM
 configuration, with LiteLLM routing inference to the OpenAI-compatible **Mantle** endpoint on
 Amazon Bedrock.
 
-It is the LiteLLM counterpart to [11-mantle/gpt5](../11-mantle/gpt5). Same model, same endpoint.
+It is the LiteLLM counterpart to [11-mantle/gpt56](../11-mantle/gpt56). Same Mantle path;
+this sample adds the LiteLLM routing layer and a Bedrock API key credential.
 The difference is how the harness reaches the model, and that difference is the point of this
 sample.
 
@@ -32,7 +33,7 @@ A harness picks how it calls its model with `--model-provider`:
 So `lite_llm` is not a hosted model. It is plumbing. You point it at an endpoint (`--api-base`) and
 hand it a key (`--api-key-arn`), and it routes the request there. In this sample the endpoint is the
 Bedrock Mantle (OpenAI Responses) endpoint, so LiteLLM ends up calling the same place
-[11-mantle/gpt5](../11-mantle/gpt5) calls directly, just through one extra layer.
+[11-mantle/gpt56](../11-mantle/gpt56) calls Mantle directly, just through one extra layer.
 
 Two pieces of the model id and base URL matter:
 
@@ -132,7 +133,7 @@ agentcore invoke --harness <name> --allowed-tools "none" --prompt "..."
 
 That makes the runtime forward zero tools, so the request is accepted. This is a temporary
 workaround, specific to the LiteLLM Responses path; the `bedrock`-provider Responses path in
-[11-mantle/gpt5](../11-mantle/gpt5) does not need it. If you do not need tools, it is harmless. The
+[11-mantle/gpt56](../11-mantle/gpt56) does not need it. If you do not need tools, it is harmless. The
 `demo.sh` here applies it for you and explains it inline. Remove it once the runtime is fixed.
 
 > **Agent Inspector note:** the Inspector (`agentcore dev`) chat panel cannot pass
@@ -181,8 +182,8 @@ and removes the local workspace.
 
 ## Where to next
 
-- **[11-mantle/gpt5](../11-mantle/gpt5)** — the same GPT-5.4 model on Mantle via
-  `--model-provider bedrock --api-format responses` (no LiteLLM, no API key).
-- **[11-mantle/endpoint](../11-mantle/endpoint)** — the open-weight `gpt-oss-120b` on Mantle.
+- **[11-mantle/gpt56](../11-mantle/gpt56)** — Mantle via
+  `--model-provider bedrock --api-format responses` (no LiteLLM, no API key;
+  default model `openai.gpt-5.6-luna`).
 - **[10-getting-started-with-agent-inspector](../10-getting-started-with-agent-inspector)** — the default (Converse) harness + Agent Inspector walkthrough.
 - **[LiteLLM](https://www.litellm.ai/)** — the routing layer this sample uses.

@@ -8,8 +8,8 @@
 # "Mantle" endpoint (the OpenAI-compatible Responses API). Then prove the run is
 # observable in CloudWatch.
 #
-# How this differs from 11-mantle/gpt5:
-#   - 09 uses --model-provider bedrock --api-format responses. The harness talks to
+# How this differs from 11-mantle/gpt56:
+#   - gpt56 uses --model-provider bedrock --api-format responses. The harness talks to
 #     Mantle directly; no API key, the execution role's Bedrock access is used.
 #   - This sample uses --model-provider lite_llm. LiteLLM is a routing layer (NOT a
 #     model provider in the marketing sense). It needs a base URL (--api-base) and an
@@ -207,7 +207,7 @@ invoke() {
   # match any real tool ("none") makes the runtime forward zero tools, so the request
   # is accepted. Read it as "allow no tools." This is a temporary workaround for a
   # known issue specific to the LiteLLM Responses path (the bedrock-provider Responses
-  # path in 11-mantle/gpt5 does not need it); remove it once the runtime is fixed.
+  # path in 11-mantle/gpt56 does not need it); remove it once the runtime is fixed.
   local ALLOW=(--allowed-tools "none")
 
   local prompts=(

@@ -1,4 +1,4 @@
-# Run a harness model through the Mantle (OpenAI-compatible) endpoint
+# Run GPT-5.6 Luna on a harness via the Mantle (OpenAI Responses) endpoint
 
 ![Agent Inspector span tree for the Mantle harness](images/02-agent-inspector.gif)
 
