@@ -150,8 +150,9 @@ STEP_PAUSE=2 ./demo.sh    # slower, for recording
   non-interactive flag sets it; interactive `agentcore create` prompts for it.
   May change in a later CLI release.
 - The CLI's harness supports `bedrock`, `open_ai`, and `gemini` as model
-  providers. For the OpenAI-compatible Mantle endpoint and LiteLLM routing on a
-  newer CLI, see [11-mantle](../11-mantle) and [12-litellm-mantle](../12-litellm-mantle).
+  providers. For the OpenAI-compatible Mantle endpoint on a newer CLI, see
+  [11-mantle](../11-mantle) (`gpt56`). A LiteLLM→Mantle walkthrough is
+  intentionally not maintained; see [12-litellm-mantle](../12-litellm-mantle).
 
 ## References
 
